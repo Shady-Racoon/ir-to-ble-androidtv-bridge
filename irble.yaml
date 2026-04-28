@@ -1,0 +1,317 @@
+esphome:
+  name: irble
+  friendly_name: IRBLEBridge
+
+esp32:
+  board: esp32-c3-devkitm-1
+  flash_size: 4MB
+  variant: ESP32C3
+  framework:
+    type: arduino
+    version: recommended
+
+logger:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+web_server:
+  port: 80
+
+globals:
+  - id: last_code
+    type: uint32_t
+    initial_value: '0'
+
+  - id: last_time
+    type: uint32_t
+    initial_value: '0'
+
+  - id: hold_start
+    type: uint32_t
+    initial_value: '0'
+
+  - id: active_code
+    type: uint32_t
+    initial_value: '0'
+
+  - id: hold_active
+    type: bool
+    initial_value: 'false'
+
+  - id: repeat_started
+    type: bool
+    initial_value: 'false'
+
+remote_receiver:
+  pin:
+    number: GPIO0
+    inverted: true
+    mode:
+      input: true
+      pullup: true
+  tolerance: 40%
+  filter: 100us
+  idle: 8ms
+  on_sony:
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+
+          // debounce Harmony repeats
+          if (x.data == id(last_code) && (now - id(last_time) < 100)) {
+            return;
+          }
+
+          id(last_code) = x.data;
+          id(last_time) = now;
+
+          id(active_code) = x.data;
+
+          if (!id(hold_active)) {
+            id(hold_active) = true;
+            id(hold_start) = now;
+          }
+
+interval:
+  - interval: 50ms
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          uint32_t code = id(active_code);
+
+          if (code == 0) return;
+
+          // continuous hold keys
+          auto repeat = [&](uint32_t c, button::Button *btn) {
+
+            static uint32_t hold_start = 0;
+            static uint32_t last_repeat = 0;
+
+            if (code != c) return;
+
+            // first press
+            if (!id(repeat_started)) {
+              btn->press();
+              id(repeat_started) = true;
+              hold_start = now;
+              last_repeat = now;
+              return;
+            }
+
+            uint32_t held_time = now - hold_start;
+
+            // wait before repeating
+            if (held_time < 500) return;
+
+            // repeat throttle
+            if (now - last_repeat < 250) return;
+
+            last_repeat = now;
+
+            btn->press();
+          };
+
+          repeat(0x2F0, id(key_up));
+          repeat(0xAF0, id(key_down));
+          repeat(0x2D0, id(key_left));
+          repeat(0xCD0, id(key_right));
+          repeat(0x490, id(key_vol_up));
+          repeat(0xC90, id(key_vol_down));
+
+          // single press keys
+          if (id(hold_active) && (now - id(last_time) > 180)) {
+
+            id(hold_active) = false;
+            id(repeat_started) = false;
+
+            uint32_t duration = now - id(hold_start);
+
+            // retrun key tap or long
+            if (code == 0xA70) {
+
+              if (duration > 700) {
+                id(key_return_long).press();
+              } else {
+                id(key_return_short).press();
+              }
+            }
+
+            // short single press only
+            if (code == 0x62E9) id(key_back).press();
+            if (code == 0x70)   id(key_home).press();
+
+            id(active_code) = 0;
+          }
+
+external_components:
+  - source: github://guyman70718/esphome-blekeyboard
+
+ble_keyboard:
+  id: my_ble_keyboard
+  name: "ESP32Keyboard"
+  manufacturer_id: "tech"
+  battery_level: 100
+  reconnect: true
+  buttons: false
+  use_default_libs: false
+
+button:
+  - platform: template
+    name: "01 Left"
+    id: key_left
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code: 0xD8
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code: 0xD8
+
+  - platform: template
+    name: "02 Right"
+    id: key_right
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code: 0xD7
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code: 0xD7
+
+  - platform: template
+    name: "03 Up"
+    id: key_up
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code: 0xDA
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code: 0xDA
+
+  - platform: template
+    name: "04 Down"
+    id: key_down
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code: 0xD9
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code: 0xD9
+
+  - platform: template
+    name: "05 Enter"
+    id: key_return_short
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code: 0xB0
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code: 0xB0
+
+  - platform: template
+    name: "06 Back"
+    id: key_back
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code:
+              - 0
+              - 32
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code:
+              - 0
+              - 32
+
+  - platform: template
+    name: "07 Home"
+    id: key_home
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code:
+              - 128
+              - 0
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code:
+              - 128
+              - 0
+
+  - platform: template
+    name: "08 VolUp"
+    id: key_vol_up
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code:
+              - 32
+              - 0
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code:
+              - 32
+              - 0
+
+  - platform: template
+    name: "09 VolDown"
+    id: key_vol_down
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code:
+              - 64
+              - 0
+        - ble_keyboard.release: 
+            id: my_ble_keyboard
+            code:
+              - 64
+              - 0
+
+  - platform: template
+    name: "10 EnterLong"
+    id: key_return_long
+    on_press:
+      then:
+        - ble_keyboard.press:
+            id: my_ble_keyboard
+            code: 0xB0
+        - delay: 2s
+        - ble_keyboard.release:
+            id: my_ble_keyboard
+            code: 0xB0
+
+  - platform: template
+    name: "11 Start advertising"
+    id: start_advertising
+    on_press:
+      then:
+        - ble_keyboard.start: my_ble_keyboard
+
+  - platform: template
+    name: "12 Stop advertising"
+    id: stop_advertising
+    on_press:
+      then:
+        - ble_keyboard.stop: my_ble_keyboard
+
+  - platform: restart
+    entity_category: "config"
+    name: "13 Restart"
